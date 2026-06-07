@@ -80,7 +80,7 @@ export const COLONY_COLORS: Record<string, string> = {
 
 /** Convert agent path to slug: "exports/email_inbox_management" → "email_inbox_management" */
 export function agentSlug(path: string): string {
-  return path.replace(/\/$/, "").split("/").pop() || path;
+  return path.replace(/[/\\]$/, "").split(/[/\\]/).pop() || path;
 }
 
 /** Convert slug to display name: "email_inbox_management" → "inbox-management" (colony style) */

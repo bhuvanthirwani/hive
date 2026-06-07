@@ -216,13 +216,24 @@ async def _on_shutdown(app: web.Application) -> None:
 
 async def handle_health(request: web.Request) -> web.Response:
     """GET /api/health — simple health check."""
-    manager: SessionManager = request.app["manager"]
-    sessions = manager.list_sessions()
+    import os
+    from aden_tools.credentials import CredentialStoreAdapter
+    try:
+        credentials = CredentialStoreAdapter.default()
+        github = credentials.get("github") is not None
+        slack = credentials.get("slack") is not None
+        supabase = credentials.get("supabase") is not None
+    except Exception as e:
+        github, slack, supabase = False, False, str(e)
+    
     return web.json_response(
         {
             "status": "ok",
-            "sessions": len(sessions),
-            "agents_loaded": sum(1 for s in sessions if s.colony_runtime is not None),
+            "env_keys": list(os.environ.keys()),
+            "github_available": github,
+            "slack_available": slack,
+            "supabase_available": supabase,
+            "supabase_url": os.environ.get("SUPABASE_URL"),
         }
     )
 

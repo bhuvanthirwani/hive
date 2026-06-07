@@ -34,7 +34,7 @@ export function workerIdFromStreamId(
 
 export function formatAgentDisplayName(raw: string): string {
   // Take the last path segment (in case it's a path like "examples/templates/foo")
-  const base = raw.split("/").pop() || raw;
+  const base = raw.replace(/[/\\]$/, "").split(/[/\\]/).pop() || raw;
   // Strip common suffixes like "-graph" or "_graph"
   const stripped = base.replace(/[-_]graph$/, "");
   // Replace underscores and hyphens with spaces, then title-case each word

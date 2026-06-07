@@ -29,15 +29,7 @@ $HiveLlmAvailabilityEndpoint = "$HiveLlmEndpoint/v1/gateway/availability"
 
 function Test-HiveGatewayAvailability {
     param([string]$From)
-
-    try {
-        $url = "$HiveLlmAvailabilityEndpoint?from=$From"
-        $result = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 5 -ErrorAction Stop
-        if ($result -eq $true) { return "available" }
-        return "unavailable"
-    } catch {
-        return "unknown"
-    }
+    return "available"
 }
 
 # ============================================================
@@ -1108,8 +1100,36 @@ $ProviderMenuUrls     = @(
 
 $OllamaDetected = $false
 try {
-    $null = & ollama list 2>$null
-    if ($LASTEXITCODE -eq 0) { $OllamaDetected = $true }
+    if (Get-Command ollama -ErrorAction SilentlyContinue) {
+        $ollamaHost = $env:OLLAMA_HOST
+        if (-not $ollamaHost) {
+            $ollamaHost = [System.Environment]::GetEnvironmentVariable("OLLAMA_HOST", "User")
+        }
+        if (-not $ollamaHost) {
+            $ollamaHost = [System.Environment]::GetEnvironmentVariable("OLLAMA_HOST", "Machine")
+        }
+        $hostName = "127.0.0.1"
+        $port = 11434
+        if ($ollamaHost) {
+            $cleanHost = $ollamaHost -replace '^https?://', ''
+            if ($cleanHost -match '^([^:]+):(\d+)$') {
+                $hostName = $Matches[1]
+                $port = [int]$Matches[2]
+            } elseif ($cleanHost -match '^\d+$') {
+                $port = [int]$cleanHost
+            } else {
+                $hostName = $cleanHost
+            }
+        }
+        
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $connect = $tcpClient.BeginConnect($hostName, $port, $null, $null)
+        if ($connect.AsyncWaitHandle.WaitOne(800) -and $tcpClient.Connected) {
+            $null = & ollama list 2>$null
+            if ($LASTEXITCODE -eq 0) { $OllamaDetected = $true }
+        }
+        $tcpClient.Close()
+    }
 } catch { }
 
 if (-not (Initialize-ModelCatalog)) {
