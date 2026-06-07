@@ -118,6 +118,7 @@ class AdenCachedStorage(CredentialStorage):
         self._provider_index: dict[str, list[str]] = {}
         # Index: "provider:alias" -> credential hash ID (for alias-based routing)
         self._alias_index: dict[str, str] = {}
+        self._refreshes: set[str] = set()
 
     def save(self, credential: CredentialObject) -> None:
         """
@@ -210,17 +211,44 @@ class AdenCachedStorage(CredentialStorage):
             logger.debug(f"Credential '{credential_id}' is local-only, skipping Aden refresh")
             return local_cred
 
-        # Try to refresh stale local credential from Aden
+        # Try to refresh stale local credential from Aden in the background if we have local_cred.
+        # This prevents blocking the main thread during execution or health checking.
+        if local_cred:
+            if credential_id not in self._refreshes:
+                self._refreshes.add(credential_id)
+                import threading
+
+                def _async_refresh():
+                    try:
+                        aden_cred = self._aden_provider.fetch_from_aden(credential_id)
+                        if aden_cred:
+                            self.save(aden_cred)
+                            logger.debug(f"Fetched credential '{credential_id}' from Aden in background")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch '{credential_id}' from Aden in background: {e}")
+                    finally:
+                        self._refreshes.discard(credential_id)
+
+                threading.Thread(
+                    target=_async_refresh,
+                    daemon=True,
+                    name=f"aden-refresh-{credential_id}"
+                ).start()
+                logger.debug(f"Triggered background Aden refresh for credential '{credential_id}'")
+            else:
+                logger.debug(f"Aden refresh for credential '{credential_id}' already in progress")
+            return local_cred
+
+        # Cold path: no local credential exists, must do sync fetch
         try:
             aden_cred = self._aden_provider.fetch_from_aden(credential_id)
             if aden_cred:
                 self.save(aden_cred)
-                logger.debug(f"Fetched credential '{credential_id}' from Aden")
+                logger.debug(f"Fetched credential '{credential_id}' from Aden (synchronous)")
                 return aden_cred
         except Exception as e:
             logger.warning(f"Failed to fetch '{credential_id}' from Aden: {e}")
-            logger.info(f"Using stale cached credential '{credential_id}'")
-            return local_cred
+            return None
 
         return local_cred
 

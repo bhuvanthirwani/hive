@@ -661,12 +661,21 @@ class CredentialStoreAdapter:
                     auto_refresh=True,
                 )
 
-                # Initial sync: populate local cache from Aden
-                try:
-                    synced = provider.sync_all(store)
-                    log.info("Aden credential sync complete: %d credentials synced", synced)
-                except Exception as e:
-                    log.warning("Aden initial sync failed (will retry on access): %s", e)
+                # Initial sync: populate local cache from Aden in background
+                def _bg_sync():
+                    try:
+                        synced = provider.sync_all(store)
+                        log.info("Aden credential sync complete: %d credentials synced", synced)
+                    except Exception as e:
+                        log.warning("Aden initial sync failed (will retry on access): %s", e)
+
+                import threading
+                threading.Thread(
+                    target=_bg_sync,
+                    daemon=True,
+                    name="aden-initial-sync"
+                ).start()
+
 
                 instance = cls(store=store, specs=specs)
                 _DEFAULT_ADAPTER_CACHE[cache_key] = instance

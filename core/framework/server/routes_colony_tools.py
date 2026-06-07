@@ -226,9 +226,12 @@ async def handle_get_tools(request: web.Request) -> web.Response:
 
     # Snapshot live OAuth providers so disconnected credentialed tools
     # can be greyed out + offer a Connect button. Mirrors routes_queen_tools.
+    # _connected_providers may hit the Aden server — run off the event loop.
+    import asyncio
+
     from framework.server.routes_queen_tools import _connected_providers
 
-    connected_providers = _connected_providers()
+    connected_providers = await asyncio.get_running_loop().run_in_executor(None, _connected_providers)
 
     return web.json_response(
         {
@@ -241,6 +244,7 @@ async def handle_get_tools(request: web.Request) -> web.Response:
             "connected_providers": sorted(connected_providers),
         }
     )
+
 
 
 async def handle_patch_tools(request: web.Request) -> web.Response:

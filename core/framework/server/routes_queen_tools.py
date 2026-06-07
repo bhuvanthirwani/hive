@@ -351,7 +351,11 @@ async def handle_get_tools(request: web.Request) -> web.Response:
 
     # Snapshot live OAuth providers so the UI can grey out rows whose
     # credential isn't authorized yet and surface a Connect button.
-    connected_providers = _connected_providers()
+    # _connected_providers calls CredentialStoreAdapter.default() which
+    # may hit the Aden server — run it off the event loop thread.
+    import asyncio
+
+    connected_providers = await asyncio.get_running_loop().run_in_executor(None, _connected_providers)
 
     response = {
         "queen_id": queen_id,
@@ -369,6 +373,7 @@ async def handle_get_tools(request: web.Request) -> web.Response:
         "connected_providers": sorted(connected_providers),
     }
     return web.json_response(response)
+
 
 
 def _connected_providers() -> set[str]:

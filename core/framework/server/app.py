@@ -216,19 +216,33 @@ async def _on_shutdown(app: web.Application) -> None:
 
 async def handle_health(request: web.Request) -> web.Response:
     """GET /api/health — simple health check."""
+    import asyncio
     import os
-    from aden_tools.credentials import CredentialStoreAdapter
-    try:
+
+    def _check_credentials():
+        from aden_tools.credentials import CredentialStoreAdapter
         credentials = CredentialStoreAdapter.default()
         github = credentials.get("github") is not None
         slack = credentials.get("slack") is not None
         supabase = credentials.get("supabase") is not None
+        return github, slack, supabase
+
+    loop = asyncio.get_running_loop()
+    try:
+        github, slack, supabase = await loop.run_in_executor(None, _check_credentials)
     except Exception as e:
         github, slack, supabase = False, False, str(e)
-    
+
+    # Session counts are cheap in-memory reads; no executor needed.
+    manager = request.app.get("manager")
+    sessions_dict = getattr(manager, "_sessions", {}) or {}
+    session_count = len(sessions_dict)
+
     return web.json_response(
         {
             "status": "ok",
+            "agents_loaded": session_count,
+            "sessions": session_count,
             "env_keys": list(os.environ.keys()),
             "github_available": github,
             "slack_available": slack,
@@ -236,6 +250,8 @@ async def handle_health(request: web.Request) -> web.Response:
             "supabase_url": os.environ.get("SUPABASE_URL"),
         }
     )
+
+
 
 
 async def _probe_browser_bridge() -> dict:

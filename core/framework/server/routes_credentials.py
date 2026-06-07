@@ -260,7 +260,7 @@ async def handle_check_agent(request: web.Request) -> web.Response:
     except ValueError as e:
         return web.json_response({"error": str(e)}, status=400)
 
-    try:
+    def _do_check():
         from framework.credentials.setup import load_agent_nodes
         from framework.credentials.validation import (
             ensure_credential_key_env,
@@ -271,7 +271,11 @@ async def handle_check_agent(request: web.Request) -> web.Response:
         ensure_credential_key_env()
 
         nodes = load_agent_nodes(agent_path)
-        result = validate_agent_credentials(nodes, verify=verify, raise_on_error=False, force_refresh=True)
+        return validate_agent_credentials(nodes, verify=verify, raise_on_error=False, force_refresh=True)
+
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _do_check)
 
         # If any credential needs Aden, include ADEN_API_KEY as a first-class row
         if any(c.aden_supported for c in result.credentials):
@@ -420,8 +424,12 @@ async def handle_list_specs(request: web.Request) -> web.Response:
         ensure_credential_key_env()
 
         has_aden_key = bool(os.environ.get("ADEN_API_KEY"))
+
+        # _presync_aden_tokens and _collect_accounts_by_provider make blocking
+        # HTTP calls to the Aden server — run them off the event loop thread.
+        loop = asyncio.get_running_loop()
         if has_aden_key:
-            _presync_aden_tokens(CREDENTIAL_SPECS)
+            await loop.run_in_executor(None, lambda: _presync_aden_tokens(CREDENTIAL_SPECS))
 
         # Build composite store (env → encrypted file)
         env_mapping = {(spec.credential_id or name): spec.env_var for name, spec in CREDENTIAL_SPECS.items()}
@@ -432,9 +440,8 @@ async def handle_list_specs(request: web.Request) -> web.Response:
             storage = env_storage
         store = CredentialStore(storage=storage)
 
-        # Snapshot accounts once — the adapter walks the same specs internally
-        # and hits both Aden and local stores, so we reuse it for every row.
-        accounts_by_provider = _collect_accounts_by_provider()
+        # Snapshot accounts — adapter hits Aden + local stores; run in executor.
+        accounts_by_provider = await loop.run_in_executor(None, _collect_accounts_by_provider)
 
         specs = []
         any_aden = False
