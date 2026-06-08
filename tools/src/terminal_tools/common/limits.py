@@ -11,7 +11,11 @@ choice.
 from __future__ import annotations
 
 import os
-import resource
+import sys
+try:
+    import resource
+except ImportError:
+    resource = None
 from collections.abc import Callable
 from typing import Any
 
@@ -39,6 +43,8 @@ def _resolve_shell(shell: bool | str) -> str | None:
         return None
 
     if shell is True:
+        if sys.platform == "win32":
+            return "cmd.exe"
         return "/bin/bash"
 
     if not isinstance(shell, str):
@@ -75,12 +81,14 @@ def sanitized_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 # Maps the public limit name to its (resource constant, multiplier)
 # tuple. Multipliers convert the agent-friendly unit (seconds, MB) to
 # the kernel unit (seconds, bytes).
-_LIMIT_MAP: dict[str, tuple[int, int]] = {
-    "cpu_sec": (resource.RLIMIT_CPU, 1),
-    "rss_mb": (resource.RLIMIT_AS, 1024 * 1024),
-    "fsize_mb": (resource.RLIMIT_FSIZE, 1024 * 1024),
-    "nofile": (resource.RLIMIT_NOFILE, 1),
-}
+_LIMIT_MAP: dict[str, tuple[int, int]] = {}
+if resource is not None:
+    _LIMIT_MAP.update({
+        "cpu_sec": (resource.RLIMIT_CPU, 1),
+        "rss_mb": (resource.RLIMIT_AS, 1024 * 1024),
+        "fsize_mb": (resource.RLIMIT_FSIZE, 1024 * 1024),
+        "nofile": (resource.RLIMIT_NOFILE, 1),
+    })
 
 
 def make_preexec_fn(limits: dict[str, int] | None) -> Callable[[], None] | None:
@@ -90,6 +98,8 @@ def make_preexec_fn(limits: dict[str, int] | None) -> Callable[[], None] | None:
     skip the fork hook entirely). Unknown keys are ignored — agents
     pass arbitrary dicts and we don't want a typo to crash exec.
     """
+    if sys.platform == "win32":
+        return None
     if not limits:
         return None
 

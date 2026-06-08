@@ -25,15 +25,18 @@ def register_terminal_tools(mcp: FastMCP) -> list[str]:
     Returns the list of registered tool names so the caller can log /
     smoke-test how many landed.
     """
+    import sys
     from terminal_tools.exec import register_exec_tools
     from terminal_tools.jobs.tools import register_job_tools
     from terminal_tools.output import register_output_tools
-    from terminal_tools.pty.tools import register_pty_tools
+    if sys.platform != "win32":
+        from terminal_tools.pty.tools import register_pty_tools
     from terminal_tools.search.tools import register_search_tools
 
     register_exec_tools(mcp)
     register_job_tools(mcp)
-    register_pty_tools(mcp)
+    if sys.platform != "win32":
+        register_pty_tools(mcp)
     register_search_tools(mcp)
     register_output_tools(mcp)
 

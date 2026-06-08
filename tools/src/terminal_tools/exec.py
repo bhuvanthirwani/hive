@@ -144,7 +144,11 @@ def register_exec_tools(mcp: FastMCP) -> None:
             return _err_envelope(command, str(e))
 
         if resolved_shell is not None:
-            spawn_argv: list[str] = [resolved_shell, "-c", command]
+            import sys
+            if sys.platform == "win32" and "cmd.exe" in resolved_shell.lower():
+                spawn_argv: list[str] = [resolved_shell, "/c", command]
+            else:
+                spawn_argv = [resolved_shell, "-c", command]
         else:
             # shell=False AND no metacharacters → safe to direct-exec.
             spawn_argv = tokens

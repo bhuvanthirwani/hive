@@ -267,7 +267,11 @@ class JobManager:
                 command_str = " ".join(str(c) for c in command)
             else:
                 command_str = str(command)
-            argv: list[str] = [resolved, "-c", command_str]
+            import sys
+            flag = "-c"
+            if sys.platform == "win32" and "cmd.exe" in resolved.lower():
+                flag = "/c"
+            argv: list[str] = [resolved, flag, command_str]
             shell_arg = False
         else:
             argv = list(command) if isinstance(command, (list, tuple)) else command  # type: ignore[assignment]
