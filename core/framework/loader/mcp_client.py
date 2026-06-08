@@ -211,26 +211,39 @@ class MCPClient:
                         else:
                             self._errlog_handle = open(os.devnull, "w")
                             errlog = self._errlog_handle
-                        self._stdio_context = stdio_client(server_params, errlog=errlog)
-                        (
-                            self._read_stream,
-                            self._write_stream,
-                        ) = await self._stdio_context.__aenter__()
 
-                        # Create persistent session
-                        self._session = ClientSession(self._read_stream, self._write_stream)
-                        await self._session.__aenter__()
+                        self._shutdown_event = asyncio.Event()
 
-                        # Initialize session
-                        await self._session.initialize()
+                        async with stdio_client(server_params, errlog=errlog) as (read_stream, write_stream):
+                            self._read_stream = read_stream
+                            self._write_stream = write_stream
 
-                        connection_ready.set()
+                            async with ClientSession(read_stream, write_stream) as session:
+                                self._session = session
+                                await session.initialize()
+                                connection_ready.set()
+
+                                # Wait until instructed to close
+                                await self._shutdown_event.wait()
                     except Exception as e:
-                        connection_error.append(e)
-                        connection_ready.set()
+                        if not connection_ready.is_set():
+                            connection_error.append(e)
+                            connection_ready.set()
+                        else:
+                            logger.error(f"MCP connection error: {e}")
+                    finally:
+                        self._session = None
+                        self._read_stream = None
+                        self._write_stream = None
+                        if self._errlog_handle is not None:
+                            try:
+                                self._errlog_handle.close()
+                            except Exception:
+                                pass
+                            self._errlog_handle = None
 
                 # Schedule connection initialization
-                self._loop.create_task(init_connection())
+                self._connection_task = self._loop.create_task(init_connection())
 
                 # Run loop forever
                 self._loop.run_forever()
@@ -324,26 +337,34 @@ class MCPClient:
                         from mcp import ClientSession
                         from mcp.client.sse import sse_client
 
-                        self._sse_context = sse_client(
+                        self._shutdown_event = asyncio.Event()
+
+                        async with sse_client(
                             self.config.url,
                             headers=self.config.headers,
                             timeout=30.0,
-                        )
-                        (
-                            self._read_stream,
-                            self._write_stream,
-                        ) = await self._sse_context.__aenter__()
+                        ) as (read_stream, write_stream):
+                            self._read_stream = read_stream
+                            self._write_stream = write_stream
 
-                        self._session = ClientSession(self._read_stream, self._write_stream)
-                        await self._session.__aenter__()
-                        await self._session.initialize()
+                            async with ClientSession(read_stream, write_stream) as session:
+                                self._session = session
+                                await session.initialize()
+                                connection_ready.set()
 
-                        connection_ready.set()
+                                await self._shutdown_event.wait()
                     except Exception as e:
-                        connection_error.append(e)
-                        connection_ready.set()
+                        if not connection_ready.is_set():
+                            connection_error.append(e)
+                            connection_ready.set()
+                        else:
+                            logger.error(f"MCP SSE connection error: {e}")
+                    finally:
+                        self._session = None
+                        self._read_stream = None
+                        self._write_stream = None
 
-                self._loop.create_task(init_connection())
+                self._connection_task = self._loop.create_task(init_connection())
                 self._loop.run_forever()
 
             self._loop_thread = threading.Thread(target=run_event_loop, daemon=True)
@@ -654,60 +675,20 @@ class MCPClient:
     _THREAD_JOIN_TIMEOUT = 12
 
     async def _cleanup_stdio_async(self) -> None:
-        """Async cleanup for persistent MCP session and context managers.
+        """Trigger cleanup for persistent MCP session and context managers."""
+        if hasattr(self, "_shutdown_event") and self._shutdown_event:
+            self._shutdown_event.set()
 
-        Cleanup order is critical:
-        - The session must be closed BEFORE the transport context manager because the
-          session depends on the streams provided by that context.
-        - This mirrors the initialization order in _connect_stdio() / _connect_sse(),
-          where the transport context is entered first (providing streams), then the
-          session is created with those streams and entered.
-        - Do not change this ordering without carefully considering these dependencies.
-        """
-        # First: close session (depends on stdio_context streams)
-        try:
-            if self._session:
-                await self._session.__aexit__(None, None, None)
-        except asyncio.CancelledError:
-            logger.warning("MCP session cleanup was cancelled; proceeding with best-effort shutdown")
-        except Exception as e:
-            logger.warning(f"Error closing MCP session: {e}")
-        finally:
-            self._session = None
-
-        # Second: close stdio_context (provides the underlying streams)
-        try:
-            if self._stdio_context:
-                await self._stdio_context.__aexit__(None, None, None)
-        except asyncio.CancelledError:
-            logger.debug("STDIO context cleanup was cancelled; proceeding with best-effort shutdown")
-        except Exception as e:
-            msg = str(e).lower()
-            if "cancel scope" in msg or "different task" in msg:
-                logger.debug("STDIO context teardown (known anyio quirk): %s", e)
-            else:
-                logger.warning(f"Error closing STDIO context: {e}")
-        finally:
-            self._stdio_context = None
-
-        try:
-            if self._sse_context:
-                await self._sse_context.__aexit__(None, None, None)
-        except asyncio.CancelledError:
-            logger.debug("SSE context cleanup was cancelled; proceeding with best-effort shutdown")
-        except Exception as e:
-            logger.warning(f"Error closing SSE context: {e}")
-        finally:
-            self._sse_context = None
-
-        # Third: close errlog file handle if we opened one
-        if self._errlog_handle is not None:
+        if hasattr(self, "_connection_task") and self._connection_task:
             try:
-                self._errlog_handle.close()
+                # Wait for the task to finish cleanup
+                await asyncio.wait_for(self._connection_task, timeout=self._CLEANUP_TIMEOUT - 2)
+            except asyncio.TimeoutError:
+                logger.warning("MCP connection task did not complete within cleanup timeout")
+            except asyncio.CancelledError:
+                logger.warning("MCP session cleanup was cancelled")
             except Exception as e:
-                logger.debug(f"Error closing errlog handle: {e}")
-            finally:
-                self._errlog_handle = None
+                logger.debug(f"MCP connection task raised during cleanup: {e}")
 
     def disconnect(self) -> None:
         """Disconnect from the MCP server."""
